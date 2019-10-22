@@ -46,6 +46,7 @@ from prefect.engine.state import (
     TriggerFailed,
 )
 from prefect.utilities.executors import run_with_heartbeat
+from prefect.utilities.logging import flush_queue
 
 if TYPE_CHECKING:
     from prefect.engine.result_handlers import ResultHandler
@@ -302,6 +303,7 @@ class TaskRunner(Runner):
                     context=context,
                     executor=executor,
                 )
+                flush_queue()
 
         # for pending signals, including retries and pauses we need to make sure the
         # task_inputs are set
