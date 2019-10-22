@@ -10,6 +10,8 @@ When running locally, log levels and message formatting are set via your Prefect
 """
 import logging
 import time
+from queue import Queue, Empty
+from threading import Thread
 from typing import Any
 
 import pendulum
@@ -22,6 +24,11 @@ class CloudHandler(logging.StreamHandler):
     def __init__(self) -> None:
         super().__init__()
         self.client = None
+        self.queue = Queue()
+        self.configure_self_logging()
+        self.start_background_thread()
+
+    def configure_self_logging(self):
         self.logger = logging.getLogger("CloudHandler")
         handler = logging.StreamHandler()
         formatter = logging.Formatter(context.config.logging.format)
@@ -30,42 +37,60 @@ class CloudHandler(logging.StreamHandler):
         self.logger.addHandler(handler)
         self.logger.setLevel(context.config.logging.level)
 
+    def batch_upload(self):
+        from prefect.client import Client
+
+        if self.client is None:
+            self.client = Client()  # type: ignore
+
+        assert isinstance(self.client, Client)  # mypy assert
+
+        while True:
+            try:
+                nlogs = self.queue.qsize()
+                if nlogs:
+                    logs = [
+                        self._format_record(self.queue.get_no_wait())
+                        for _ in range(nlogs)
+                    ]
+                    logs = [log for log in logs if log is not None]  # safety precaution
+                    self.client.write_run_logs(logs)
+            except Exception as exc:
+                self.logger.critical(
+                    "Failed to write logs with error: {}".format(str(exc))
+                )
+            time.sleep(5)
+
+    def _format_record(self, record_dict):
+        flow_run_id = prefect.context.get("flow_run_id", None)
+        task_run_id = prefect.context.get("task_run_id", None)
+        timestamp = pendulum.from_timestamp(
+            record_dict.get("created", time.time())
+        ).isoformat()
+        name = record_dict.get("name", None)
+        message = record_dict.get("message", None)
+        level = record_dict.get("levelname", None)
+
+        if record_dict.get("exc_text") is not None:
+            message += "\n" + record_dict["exc_text"]
+            record_dict.pop("exc_info", None)
+        return record_dict
+
+    def start_background_thread(self):
+        t = Thread(target=self.batch_upload)
+        t.start()
+
     def emit(self, record) -> None:  # type: ignore
         # if we shouldn't log to cloud, don't emit
         if not prefect.context.config.logging.log_to_cloud:
             return
 
         try:
-            from prefect.client import Client
-
-            if self.client is None:
-                self.client = Client()  # type: ignore
-
-            assert isinstance(self.client, Client)  # mypy assert
-
-            record_dict = record.__dict__.copy()
-            flow_run_id = prefect.context.get("flow_run_id", None)
-            task_run_id = prefect.context.get("task_run_id", None)
-            timestamp = pendulum.from_timestamp(record_dict.get("created", time.time()))
-            name = record_dict.get("name", None)
-            message = record_dict.get("message", None)
-            level = record_dict.get("levelname", None)
-
-            if record_dict.get("exc_text") is not None:
-                message += "\n" + record_dict["exc_text"]
-                record_dict.pop("exc_info", None)
-
-            self.client.write_run_log(
-                flow_run_id=flow_run_id,
-                task_run_id=task_run_id,
-                timestamp=timestamp,
-                name=name,
-                message=message,
-                level=level,
-                info=record_dict,
-            )
+            self.queue.put(record.__dict__.copy())
         except Exception as exc:
-            self.logger.critical("Failed to write log with error: {}".format(str(exc)))
+            self.logger.critical(
+                "Failed to enqueue log with error: {}".format(str(exc))
+            )
 
 
 def configure_logging(testing: bool = False) -> logging.Logger:
