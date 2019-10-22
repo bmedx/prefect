@@ -82,6 +82,14 @@ class CloudHandler(logging.StreamHandler):
         self.client = None
         self.configure_self_logging()
 
+    def __getstate__(self) -> dict:
+        flush_queue()
+        return super().__getstate__()
+
+    def __setstate__(self, state: dict) -> None:
+        flush_queue()
+        return super().__setstate__(state)
+
     def configure_self_logging(self):
         self.logger = logging.getLogger("CloudHandler")
         handler = logging.StreamHandler()
