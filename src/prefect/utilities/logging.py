@@ -37,7 +37,7 @@ def _format_record(record_dict):
     if record_dict.get("exc_text") is not None:
         message += "\n" + record_dict["exc_text"]
         record_dict.pop("exc_info", None)
-    return record_dict
+    return dict(flowRunId=flow_run_id, taskRunId=task_run_id, timestamp=timestamp, name=name, message=message, level=level)
 
 
 def flush_queue():
