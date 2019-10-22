@@ -8,9 +8,10 @@ Note that Prefect Tasks come equipped with their own loggers.  These can be acce
 
 When running locally, log levels and message formatting are set via your Prefect configuration file.
 """
+import atexit
 import logging
 import time
-from queue import Queue, Empty
+from queue import Queue
 from threading import Thread
 from typing import Any
 
@@ -18,15 +19,64 @@ import pendulum
 
 import prefect
 from prefect.utilities.context import context
+from prefect.utilities.executor import Heartbeat
+
+
+LOG_QUEUE = Queue()
+
+
+def _format_record(record_dict):
+    flow_run_id = prefect.context.get("flow_run_id", None)
+    task_run_id = prefect.context.get("task_run_id", None)
+    timestamp = pendulum.from_timestamp(
+        record_dict.get("created", time.time())
+    ).isoformat()
+    name = record_dict.get("name", None)
+    message = record_dict.get("message", None)
+    level = record_dict.get("levelname", None)
+
+    if record_dict.get("exc_text") is not None:
+        message += "\n" + record_dict["exc_text"]
+        record_dict.pop("exc_info", None)
+    return record_dict
+
+
+def flush_queue():
+    try:
+        if not prefect.context.config.logging.log_to_cloud:
+            return
+
+        from prefect.client import Client
+
+        client = Client()  # type: ignore
+        nlogs = LOG_QUEUE.qsize()
+        if nlogs:
+            logs = [_format_record(LOG_QUEUE.get_no_wait()) for _ in range(nlogs)]
+            logs = [log for log in logs if log is not None]  # safety precaution
+            client.write_run_logs(logs)
+    except Exception as exc:
+        pass
+
+
+BATCH_JOB = Heartbeat(flush_queue, 5)
+BATCH_JOB.daemon = True
+BATCH_JOB.start()
+
+
+def finish_logs():
+    BATCH_JOB.cancel()
+    BATCH_JOB.join()
+    flush_queue()
+
+
+atexit.register(finish_logs)
 
 
 class CloudHandler(logging.StreamHandler):
     def __init__(self) -> None:
         super().__init__()
         self.client = None
-        self.queue = Queue()
         self.configure_self_logging()
-        self.start_background_thread()
 
     def configure_self_logging(self):
         self.logger = logging.getLogger("CloudHandler")
@@ -37,56 +87,13 @@ class CloudHandler(logging.StreamHandler):
         self.logger.addHandler(handler)
         self.logger.setLevel(context.config.logging.level)
 
-    def batch_upload(self):
-        while True:
-            try:
-                nlogs = self.queue.qsize()
-                if nlogs:
-                    logs = [
-                        self._format_record(self.queue.get_no_wait())
-                        for _ in range(nlogs)
-                    ]
-                    logs = [log for log in logs if log is not None]  # safety precaution
-                    self.client.write_run_logs(logs)
-            except Exception as exc:
-                self.logger.critical(
-                    "Failed to write logs with error: {}".format(str(exc))
-                )
-            time.sleep(5)
-
-    def _format_record(self, record_dict):
-        flow_run_id = prefect.context.get("flow_run_id", None)
-        task_run_id = prefect.context.get("task_run_id", None)
-        timestamp = pendulum.from_timestamp(
-            record_dict.get("created", time.time())
-        ).isoformat()
-        name = record_dict.get("name", None)
-        message = record_dict.get("message", None)
-        level = record_dict.get("levelname", None)
-
-        if record_dict.get("exc_text") is not None:
-            message += "\n" + record_dict["exc_text"]
-            record_dict.pop("exc_info", None)
-        return record_dict
-
-    def start_background_thread(self):
-        t = Thread(target=self.batch_upload, daemon=True)
-        t.start()
-
     def emit(self, record) -> None:  # type: ignore
         # if we shouldn't log to cloud, don't emit
         if not prefect.context.config.logging.log_to_cloud:
             return
 
         try:
-            from prefect.client import Client
-
-            if self.client is None:
-                self.client = Client()  # type: ignore
-
-            assert isinstance(self.client, Client)  # mypy assert
-
-            self.queue.put(record.__dict__.copy())
+            LOG_QUEUE.put(record.__dict__.copy())
         except Exception as exc:
             self.logger.critical(
                 "Failed to enqueue log with error: {}".format(str(exc))
