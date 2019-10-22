@@ -19,7 +19,7 @@ import pendulum
 
 import prefect
 from prefect.utilities.context import context
-from prefect.utilities.executor import Heartbeat
+from prefect.utilities.executors import Heartbeat
 
 
 LOG_QUEUE = Queue()
