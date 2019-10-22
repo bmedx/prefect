@@ -24,6 +24,7 @@ from prefect.engine.state import (
 )
 from prefect.engine.task_runner import TaskRunner, TaskRunnerInitializeResult
 from prefect.utilities.graphql import with_args
+from prefect.utilities.logging import flush_queue
 
 
 class CloudTaskRunner(TaskRunner):

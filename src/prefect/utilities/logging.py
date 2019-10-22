@@ -42,14 +42,11 @@ def _format_record(record_dict):
 
 def flush_queue():
     try:
-        if not prefect.context.config.logging.log_to_cloud:
-            return
-
-        from prefect.client import Client
-
-        client = Client()  # type: ignore
         nlogs = LOG_QUEUE.qsize()
         if nlogs:
+            from prefect.client import Client
+
+            client = Client()  # type: ignore
             logs = [_format_record(LOG_QUEUE.get_no_wait()) for _ in range(nlogs)]
             logs = [log for log in logs if log is not None]  # safety precaution
             client.write_run_logs(logs)
