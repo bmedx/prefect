@@ -12,14 +12,13 @@ import atexit
 import logging
 import time
 from queue import Queue
-from threading import Thread
+import threading
 from typing import Any
 
 import pendulum
 
 import prefect
 from prefect.utilities.context import context
-from prefect.utilities.executors import Heartbeat
 
 
 LOG_QUEUE = Queue()
@@ -58,7 +57,15 @@ def flush_queue():
         pass
 
 
-BATCH_JOB = Heartbeat(flush_queue, 5)
+class Heartbeat(threading.Timer):
+    def run(self) -> None:
+        self.finished.wait(self.interval)  # type: ignore
+        while not self.finished.is_set():  # type: ignore
+            self.function(*self.args, **self.kwargs)  # type: ignore
+            self.finished.wait(self.interval)  # type: ignore
+
+
+BATCH_JOB = Heartbeat(5, flush_queue)
 BATCH_JOB.daemon = True
 BATCH_JOB.start()
 
