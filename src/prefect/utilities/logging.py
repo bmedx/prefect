@@ -38,13 +38,6 @@ class CloudHandler(logging.StreamHandler):
         self.logger.setLevel(context.config.logging.level)
 
     def batch_upload(self):
-        from prefect.client import Client
-
-        if self.client is None:
-            self.client = Client()  # type: ignore
-
-        assert isinstance(self.client, Client)  # mypy assert
-
         while True:
             try:
                 nlogs = self.queue.qsize()
@@ -77,7 +70,7 @@ class CloudHandler(logging.StreamHandler):
         return record_dict
 
     def start_background_thread(self):
-        t = Thread(target=self.batch_upload)
+        t = Thread(target=self.batch_upload, daemon=True)
         t.start()
 
     def emit(self, record) -> None:  # type: ignore
@@ -86,6 +79,13 @@ class CloudHandler(logging.StreamHandler):
             return
 
         try:
+            from prefect.client import Client
+
+            if self.client is None:
+                self.client = Client()  # type: ignore
+
+            assert isinstance(self.client, Client)  # mypy assert
+
             self.queue.put(record.__dict__.copy())
         except Exception as exc:
             self.logger.critical(
