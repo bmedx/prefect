@@ -39,10 +39,9 @@ spec:
               value: "prefect.engine.cloud.CloudTaskRunner"
           resources:
             requests:
-              cpu: "700m"
+              cpu: "50m"
             limits:
-              cpu: "700m"
-              memory: "1Gi"
+              cpu: "50m"
       restartPolicy: Never
       imagePullSecrets:
       - name: ""
